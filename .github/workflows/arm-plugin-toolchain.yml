@@ -1,0 +1,177 @@
+# Build the Windows ARM GNU toolchain with GCC plugin support.
+
+name: ARM Plugin Toolchain
+
+on:
+  push:
+    branches:
+    - build-arm-plugin-v1.0.1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  BUG_URL: 'https://github.com/zephyrproject-rtos/sdk-ng/issues'
+  BUNDLE_NAME: Zephyr SDK
+  TARGET: arm-zephyr-eabi
+  HOST: windows-x86_64
+  HOST_TRIPLE: x86_64-w64-mingw32
+
+jobs:
+  build:
+    name: Windows ARM GNU Toolchain
+    runs-on: ubuntu-24.04
+    container: ghcr.io/zephyrproject-rtos/sdk-build:v1.5.2
+    timeout-minutes: 360
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    - name: Check out source code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Set up build environment
+      run: |
+        WORKSPACE="${RUNNER_TEMP}/workspace"
+        mkdir -p "${WORKSPACE}"
+
+        chmod -R 777 "${GITHUB_WORKSPACE}"
+        chmod -R 777 "${RUNNER_TEMP}"
+
+        apt-get update
+        apt-get install -y autoconf automake bison flex gettext \
+                               help2man libboost-dev libboost-regex-dev \
+                               libncurses5-dev libtool-bin libtool-doc \
+                               pkg-config texinfo p7zip
+
+        echo "/opt/mingw-w64-win32/bin" >> "${GITHUB_PATH}"
+        echo "TAR=tar" >> "${GITHUB_ENV}"
+        echo "WORKSPACE=${WORKSPACE}" >> "${GITHUB_ENV}"
+
+    - name: Check out submodules
+      run: |
+        git config --global --add safe.directory '*'
+        git submodule init
+        git submodule update --depth=1 --recursive crosskit/crosskit-mingw-w64-libpython
+        git submodule update --depth=1 --recursive crosstool-ng
+        git submodule update --depth=1 --recursive binutils
+        git submodule update --depth=1 --recursive gdb
+        git submodule update --depth=1 --recursive gcc
+        git submodule update --depth=1 --recursive picolibc
+
+    - name: Build crosstool-ng
+      run: |
+        pushd "${WORKSPACE}"
+        mkdir -p crosstool-ng-build
+        cd crosstool-ng-build
+
+        pushd "${GITHUB_WORKSPACE}/crosstool-ng"
+        ./bootstrap
+        popd
+
+        "${GITHUB_WORKSPACE}/crosstool-ng/configure" --prefix="${WORKSPACE}/crosstool-ng"
+        make -j"$(nproc)"
+        make install
+
+        popd
+        rm -rf "${WORKSPACE}/crosstool-ng-build"
+        echo "CT_NG=${WORKSPACE}/crosstool-ng/bin/ct-ng" >> "${GITHUB_ENV}"
+
+    - name: Test crosstool-ng
+      run: |
+        "${CT_NG}" version
+
+    - name: Generate version information
+      run: |
+        VERSION="$(git describe --tags --match 'v*')"
+        echo "${VERSION:1}" > "${RUNNER_TEMP}/version"
+
+    - name: Build toolchain
+      run: |
+        export CT_PREFIX="${WORKSPACE}/output"
+
+        mkdir -p "${WORKSPACE}/build"
+        pushd "${WORKSPACE}/build"
+
+        cat "${GITHUB_WORKSPACE}/configs/common.config" \
+            "${GITHUB_WORKSPACE}/configs/${TARGET}.config" \
+            > .config
+
+        cat <<EOF >> .config
+        CT_SHOW_CT_VERSION=n
+        CT_TOOLCHAIN_PKGVERSION="${BUNDLE_NAME} $(<"${RUNNER_TEMP}/version")"
+        CT_TOOLCHAIN_BUGURL="${BUG_URL}"
+        CT_LOCAL_TARBALLS_DIR="${WORKSPACE}/sources"
+        CT_OVERLAY_LOCATION="${GITHUB_WORKSPACE}/overlays"
+        CT_LOG_PROGRESS_BAR=n
+        CT_LOG_EXTRA=y
+        CT_LOG_LEVEL_MAX="EXTRA"
+        CT_CANADIAN=y
+        CT_HOST="${HOST_TRIPLE}"
+        CT_GDB_CROSS_PYTHON=y
+        CT_GDB_CROSS_PYTHON_VARIANT=y
+        CT_GDB_CROSS_PYTHON_BINARY="${GITHUB_WORKSPACE}/crosskit/crosskit-mingw-w64-libpython/python-3.12.10/bin/python"
+        CT_EXPERIMENTAL=y
+        CT_ALLOW_BUILD_AS_ROOT=y
+        CT_ALLOW_BUILD_AS_ROOT_SURE=y
+        EOF
+
+        mkdir -p "${WORKSPACE}/sources"
+
+        "${CT_NG}" savedefconfig DEFCONFIG=build.config
+        "${CT_NG}" distclean
+        "${CT_NG}" defconfig DEFCONFIG=build.config
+        "${CT_NG}" build
+        popd
+
+    - name: Verify plugin configuration
+      run: |
+        grep -E 'CT_BINUTILS_PLUGINS=y|CT_CC_GCC_ENABLE_PLUGINS=y' "${WORKSPACE}/build/.config"
+        grep -E -- '--enable-plugin' "${WORKSPACE}/build/build.log"
+
+    - name: Package toolchain
+      run: |
+        OUTPUT_BASE="${WORKSPACE}/output"
+        OUTPUT_DIR="HOST-${HOST_TRIPLE}"
+
+        chmod -R u+w "${OUTPUT_BASE}/${OUTPUT_DIR}"
+
+        pushd "${OUTPUT_BASE}/${OUTPUT_DIR}/${TARGET}"
+        rm -f build.log.bz2
+        test -x "bin/${TARGET}-gcc.exe"
+        popd
+
+        mv "${OUTPUT_BASE}/${OUTPUT_DIR}" "${OUTPUT_BASE}/output"
+
+        ARCHIVE_NAME="toolchain_gnu_${HOST}_${TARGET}"
+        ARCHIVE_FILE="${ARCHIVE_NAME}.7z"
+
+        pushd "${OUTPUT_BASE}/output"
+        7z a -t7z -l "${GITHUB_WORKSPACE}/${ARCHIVE_FILE}" "${TARGET}"
+        popd
+
+        md5sum "${ARCHIVE_FILE}" > md5.sum
+        sha256sum "${ARCHIVE_FILE}" > sha256.sum
+
+    - name: Upload toolchain build log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: log_toolchain_gnu_windows-x86_64_arm-zephyr-eabi
+        path: ${{ runner.temp }}/workspace/build/build.log
+
+    - name: Upload toolchain artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: toolchain_gnu_windows-x86_64_arm-zephyr-eabi
+        path: |
+          toolchain_gnu_windows-x86_64_arm-zephyr-eabi.7z
+          md5.sum
+          sha256.sum
