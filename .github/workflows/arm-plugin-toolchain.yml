@@ -23,7 +23,6 @@ jobs:
   build:
     name: Windows ARM GNU Toolchain
     runs-on: ubuntu-24.04
-    container: ghcr.io/zephyrproject-rtos/sdk-build:v1.5.2
     timeout-minutes: 360
 
     defaults:
@@ -37,11 +36,29 @@ jobs:
         fetch-depth: 0
         persist-credentials: false
 
-    - name: Set up build environment
+    - name: Free runner disk space
       run: |
-        WORKSPACE="${RUNNER_TEMP}/workspace"
-        mkdir -p "${WORKSPACE}"
+        df -h
 
+        sudo rm -rf \
+          /usr/share/dotnet \
+          /usr/local/lib/android \
+          /opt/ghc \
+          /usr/local/share/boost \
+          "${AGENT_TOOLSDIRECTORY}"
+
+        docker system prune -af || true
+        df -h
+
+    - name: Build and package toolchain
+      run: |
+        cat > "${RUNNER_TEMP}/build-arm-plugin-toolchain.sh" <<'SCRIPT'
+        set -euo pipefail
+
+        WORKSPACE="${RUNNER_TEMP}/workspace"
+        CT_NG="${WORKSPACE}/crosstool-ng/bin/ct-ng"
+
+        mkdir -p "${WORKSPACE}"
         chmod -R 777 "${GITHUB_WORKSPACE}"
         chmod -R 777 "${RUNNER_TEMP}"
 
@@ -51,12 +68,9 @@ jobs:
                                libncurses5-dev libtool-bin libtool-doc \
                                pkg-config texinfo p7zip
 
-        echo "/opt/mingw-w64-win32/bin" >> "${GITHUB_PATH}"
-        echo "TAR=tar" >> "${GITHUB_ENV}"
-        echo "WORKSPACE=${WORKSPACE}" >> "${GITHUB_ENV}"
+        export PATH="/opt/mingw-w64-win32/bin:${PATH}"
+        export TAR=tar
 
-    - name: Check out submodules
-      run: |
         git config --global --add safe.directory '*'
         git submodule init
         git submodule update --depth=1 --recursive crosskit/crosskit-mingw-w64-libpython
@@ -66,8 +80,6 @@ jobs:
         git submodule update --depth=1 --recursive gcc
         git submodule update --depth=1 --recursive picolibc
 
-    - name: Build crosstool-ng
-      run: |
         pushd "${WORKSPACE}"
         mkdir -p crosstool-ng-build
         cd crosstool-ng-build
@@ -82,19 +94,11 @@ jobs:
 
         popd
         rm -rf "${WORKSPACE}/crosstool-ng-build"
-        echo "CT_NG=${WORKSPACE}/crosstool-ng/bin/ct-ng" >> "${GITHUB_ENV}"
-
-    - name: Test crosstool-ng
-      run: |
         "${CT_NG}" version
 
-    - name: Generate version information
-      run: |
         VERSION="$(git describe --tags --match 'v*')"
         echo "${VERSION:1}" > "${RUNNER_TEMP}/version"
 
-    - name: Build toolchain
-      run: |
         export CT_PREFIX="${WORKSPACE}/output"
 
         mkdir -p "${WORKSPACE}/build"
@@ -131,13 +135,9 @@ jobs:
         "${CT_NG}" build
         popd
 
-    - name: Verify plugin configuration
-      run: |
         grep -E 'CT_BINUTILS_PLUGINS=y|CT_CC_GCC_ENABLE_PLUGINS=y' "${WORKSPACE}/build/.config"
         grep -E -- '--enable-plugin' "${WORKSPACE}/build/build.log"
 
-    - name: Package toolchain
-      run: |
         OUTPUT_BASE="${WORKSPACE}/output"
         OUTPUT_DIR="HOST-${HOST_TRIPLE}"
 
@@ -157,8 +157,23 @@ jobs:
         7z a -t7z -l "${GITHUB_WORKSPACE}/${ARCHIVE_FILE}" "${TARGET}"
         popd
 
-        md5sum "${ARCHIVE_FILE}" > md5.sum
-        sha256sum "${ARCHIVE_FILE}" > sha256.sum
+        md5sum "${ARCHIVE_FILE}" > "${GITHUB_WORKSPACE}/md5.sum"
+        sha256sum "${ARCHIVE_FILE}" > "${GITHUB_WORKSPACE}/sha256.sum"
+        SCRIPT
+
+        docker run --rm \
+          -e GITHUB_WORKSPACE="${GITHUB_WORKSPACE}" \
+          -e RUNNER_TEMP="${RUNNER_TEMP}" \
+          -e BUG_URL="${BUG_URL}" \
+          -e BUNDLE_NAME="${BUNDLE_NAME}" \
+          -e TARGET="${TARGET}" \
+          -e HOST="${HOST}" \
+          -e HOST_TRIPLE="${HOST_TRIPLE}" \
+          -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}" \
+          -v "${RUNNER_TEMP}:${RUNNER_TEMP}" \
+          -w "${GITHUB_WORKSPACE}" \
+          ghcr.io/zephyrproject-rtos/sdk-build:v1.5.2 \
+          bash "${RUNNER_TEMP}/build-arm-plugin-toolchain.sh"
 
     - name: Upload toolchain build log
       if: always()
