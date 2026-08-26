@@ -294,6 +294,9 @@ const char *easan_store_name(const char *name)
     if (std::strstr(name, "asan_store1") != nullptr) {
         return "__easan_store1";
     }
+    if (std::strstr(name, "asan_storeN") != nullptr) {
+        return "__easan_storeN";
+    }
     return nullptr;
 }
 
@@ -317,6 +320,7 @@ public:
         }
         unsigned stores = 0;
         unsigned loads = 0;
+        unsigned no_return = 0;
         basic_block bb;
         FOR_EACH_BB_FN(bb, fn) {
             for (gimple_stmt_iterator gsi = gsi_start_bb(bb); !gsi_end_p(gsi); gsi_next(&gsi)) {
@@ -334,6 +338,13 @@ public:
                     ++loads;
                     continue;
                 }
+                if (std::strcmp(name, "__asan_handle_no_return") == 0) {
+                    gimple_call_set_fndecl(call,
+                                           external_decl("__easan_handle_no_return", TREE_TYPE(original), original));
+                    update_stmt(stmt);
+                    ++no_return;
+                    continue;
+                }
                 const char *replacement = easan_store_name(name);
                 if (replacement != nullptr) {
                     gimple_call_set_fndecl(call, external_decl(replacement, TREE_TYPE(original), original));
@@ -347,10 +358,10 @@ public:
             error_at(DECL_SOURCE_LOCATION(fn->decl),
                      "EASan write-only build contains %u scalar ASan load callback(s)", loads);
         }
-        if (!options.quiet && (stores != 0U || loads != 0U || is_hot_function(fn))) {
+        if (!options.quiet && (stores != 0U || loads != 0U || no_return != 0U || is_hot_function(fn))) {
             std::fprintf(stderr,
-                         "EASAN_MANIFEST phase=callbacks function=%s hot=%u stores=%u loads=%u\n",
-                         function_name(fn), is_hot_function(fn) ? 1U : 0U, stores, loads);
+                         "EASAN_MANIFEST phase=callbacks function=%s hot=%u stores=%u loads=%u noreturn=%u\n",
+                         function_name(fn), is_hot_function(fn) ? 1U : 0U, stores, loads, no_return);
         }
         return 0;
     }
