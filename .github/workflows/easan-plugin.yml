@@ -42,6 +42,7 @@ jobs:
         mkdir -p toolchain
         7z x -y "toolchain-artifact/${TOOLCHAIN_ARTIFACT}.7z" -otoolchain
         test -f toolchain/arm-zephyr-eabi/lib/gcc/arm-zephyr-eabi/14.3.0/plugin/include/plugin.h
+        test -f toolchain/arm-zephyr-eabi/lib/gcc/arm-zephyr-eabi/14.3.0/plugin/cc1.exe.a
         test -f toolchain/arm-zephyr-eabi/libexec/gcc/arm-zephyr-eabi/14.3.0/cc1.exe
 
     - name: Compile plugin only in the SDK build container
@@ -64,7 +65,7 @@ jobs:
               -static-libgcc -static-libstdc++ \
               -I "${GITHUB_WORKSPACE}/toolchain/arm-zephyr-eabi/lib/gcc/arm-zephyr-eabi/14.3.0/plugin/include" \
               "${GITHUB_WORKSPACE}/tools/easan-plugin/easan_opt_plugin.cc" \
-              "${GITHUB_WORKSPACE}/toolchain/arm-zephyr-eabi/libexec/gcc/arm-zephyr-eabi/14.3.0/cc1.exe" \
+              "${GITHUB_WORKSPACE}/toolchain/arm-zephyr-eabi/lib/gcc/arm-zephyr-eabi/14.3.0/plugin/cc1.exe.a" \
               -o "${GITHUB_WORKSPACE}/plugin-output/easan_opt_plugin.dll"
             x86_64-w64-mingw32-objdump -p "${GITHUB_WORKSPACE}/plugin-output/easan_opt_plugin.dll" \
               | sed -n "/DLL Name/ p" \
