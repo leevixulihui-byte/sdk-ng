@@ -1,0 +1,81 @@
+name: EASan Plugin DLL
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+    - easan-plugin-dev-v0.1
+    paths:
+    - tools/easan-plugin/**
+    - .github/workflows/easan-plugin.yml
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  TOOLCHAIN_RUN_ID: '32822745650'
+  TOOLCHAIN_ARTIFACT: toolchain_gnu_windows-x86_64_arm-zephyr-eabi
+
+jobs:
+  build:
+    name: Build Windows x64 plugin DLL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+    - name: Check out plugin source
+      uses: actions/checkout@v4
+
+    - name: Download existing GCC 14.3 plugin-enabled toolchain
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ env.TOOLCHAIN_ARTIFACT }}
+        path: toolchain-artifact
+        github-token: ${{ github.token }}
+        run-id: ${{ env.TOOLCHAIN_RUN_ID }}
+
+    - name: Extract only the existing toolchain
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p toolchain
+        7z x -y "toolchain-artifact/${TOOLCHAIN_ARTIFACT}.7z" -otoolchain
+        test -f toolchain/arm-zephyr-eabi/lib/gcc/arm-zephyr-eabi/14.3.0/plugin/include/plugin.h
+        test -f toolchain/arm-zephyr-eabi/libexec/gcc/arm-zephyr-eabi/14.3.0/cc1.exe
+
+    - name: Compile plugin only in the SDK build container
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p plugin-output
+        docker run --rm \
+          -e GITHUB_WORKSPACE="${GITHUB_WORKSPACE}" \
+          -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}" \
+          -w "${GITHUB_WORKSPACE}" \
+          ghcr.io/zephyrproject-rtos/sdk-build:v1.5.2 \
+          bash -c '
+            set -euo pipefail
+            export PATH="/opt/mingw-w64-win32/bin:${PATH}"
+            CXX="$(command -v x86_64-w64-mingw32-g++)"
+            "${CXX}" --version
+            "${CXX}" \
+              -std=gnu++17 -O2 -shared -fno-rtti -fno-exceptions \
+              -static-libgcc -static-libstdc++ \
+              -I "${GITHUB_WORKSPACE}/toolchain/arm-zephyr-eabi/lib/gcc/arm-zephyr-eabi/14.3.0/plugin/include" \
+              "${GITHUB_WORKSPACE}/tools/easan-plugin/easan_opt_plugin.cc" \
+              "${GITHUB_WORKSPACE}/toolchain/arm-zephyr-eabi/libexec/gcc/arm-zephyr-eabi/14.3.0/cc1.exe" \
+              -o "${GITHUB_WORKSPACE}/plugin-output/easan_opt_plugin.dll"
+            x86_64-w64-mingw32-objdump -p "${GITHUB_WORKSPACE}/plugin-output/easan_opt_plugin.dll" \
+              | sed -n "/DLL Name/ p" \
+              > "${GITHUB_WORKSPACE}/plugin-output/easan_opt_plugin.dependencies.txt"
+          '
+        test -s plugin-output/easan_opt_plugin.dll
+        sha256sum plugin-output/easan_opt_plugin.dll > plugin-output/easan_opt_plugin.dll.sha256
+
+    - name: Upload plugin-only artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: easan-opt-plugin-windows-x64-gcc-14.3
+        path: plugin-output/
+        if-no-files-found: error
