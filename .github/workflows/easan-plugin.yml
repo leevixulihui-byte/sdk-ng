@@ -49,7 +49,7 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
-        mkdir -p plugin-output
+        mkdir -p plugin-output plugin-build
         docker run --rm \
           -e GITHUB_WORKSPACE="${GITHUB_WORKSPACE}" \
           -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}" \
@@ -60,12 +60,16 @@ jobs:
             export PATH="/opt/mingw-w64-win32/bin:${PATH}"
             CXX="$(command -v x86_64-w64-mingw32-g++)"
             "${CXX}" --version
+            cp \
+              "${GITHUB_WORKSPACE}/toolchain/arm-zephyr-eabi/lib/gcc/arm-zephyr-eabi/14.3.0/plugin/cc1.exe.a" \
+              "${GITHUB_WORKSPACE}/plugin-build/cc1.exe.a"
+            x86_64-w64-mingw32-ranlib "${GITHUB_WORKSPACE}/plugin-build/cc1.exe.a"
             "${CXX}" \
               -std=gnu++17 -O2 -shared -fno-rtti -fno-exceptions \
               -static-libgcc -static-libstdc++ \
               -I "${GITHUB_WORKSPACE}/toolchain/arm-zephyr-eabi/lib/gcc/arm-zephyr-eabi/14.3.0/plugin/include" \
               "${GITHUB_WORKSPACE}/tools/easan-plugin/easan_opt_plugin.cc" \
-              "${GITHUB_WORKSPACE}/toolchain/arm-zephyr-eabi/lib/gcc/arm-zephyr-eabi/14.3.0/plugin/cc1.exe.a" \
+              "${GITHUB_WORKSPACE}/plugin-build/cc1.exe.a" \
               -o "${GITHUB_WORKSPACE}/plugin-output/easan_opt_plugin.dll"
             x86_64-w64-mingw32-objdump -p "${GITHUB_WORKSPACE}/plugin-output/easan_opt_plugin.dll" \
               | sed -n "/DLL Name/ p" \
