@@ -179,10 +179,21 @@ tree rewrite_frontend_memop(tree *node_ptr, int *, void *data)
     return nullptr;
 }
 
+bool instrumentation_disabled(tree decl)
+{
+    if (decl == nullptr) {
+        return false;
+    }
+    tree attributes = DECL_ATTRIBUTES(decl);
+    return lookup_attribute("no_sanitize_address", attributes) != nullptr
+        || lookup_attribute("no_address_safety_analysis", attributes) != nullptr
+        || lookup_attribute("no_sanitize", attributes) != nullptr;
+}
+
 void finish_parse_function(void *event_data, void *)
 {
     tree fn = static_cast<tree>(event_data);
-    if (fn == nullptr || DECL_SAVED_TREE(fn) == nullptr) {
+    if (fn == nullptr || DECL_SAVED_TREE(fn) == nullptr || instrumentation_disabled(fn)) {
         return;
     }
 
@@ -216,6 +227,9 @@ public:
 
     unsigned int execute(function *fn) final
     {
+        if (instrumentation_disabled(fn != nullptr ? fn->decl : nullptr)) {
+            return 0;
+        }
         unsigned rewritten = 0;
         basic_block bb;
         FOR_EACH_BB_FN(bb, fn) {
@@ -298,6 +312,9 @@ public:
 
     unsigned int execute(function *fn) final
     {
+        if (instrumentation_disabled(fn != nullptr ? fn->decl : nullptr)) {
+            return 0;
+        }
         unsigned stores = 0;
         unsigned loads = 0;
         basic_block bb;
