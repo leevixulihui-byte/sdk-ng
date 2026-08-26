@@ -256,7 +256,7 @@ public:
             std::fprintf(stderr, "EASAN_MANIFEST phase=memop function=%s normalized=%u\n",
                          function_name(fn), rewritten);
         }
-        return 0;
+        return rewritten != 0U ? TODO_update_ssa : 0U;
     }
 };
 
