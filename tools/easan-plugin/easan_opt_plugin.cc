@@ -8,6 +8,7 @@
 #include "gimple.h"
 #include "gimple-iterator.h"
 #include "gimple-ssa.h"
+#include "stringpool.h"
 #include "attribs.h"
 #include "diagnostic-core.h"
 #include "input.h"
